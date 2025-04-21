@@ -177,6 +177,7 @@ class Int4WeightOnlyEmbeddingQATQuantizer(TwoStepQuantizer):
                 scale_precision=self.scale_precision,
                 zero_point_precision=self.zero_point_precision,
                 device=child.weight.device,
+                dtype=child.weight.dtype,
             )
             # In distributed training, the model may be instantiated
             # on the meta device, in which case there is no need to
@@ -202,12 +203,19 @@ class Int4WeightOnlyEmbeddingQATQuantizer(TwoStepQuantizer):
         weight: torch.Tensor,
         bit_width: int,
         group_size: int,
+        *,
+        scale_precision: torch.dtype = torch.float32,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Helper function to quantize weights
         """
         (qmin, qmax) = _get_qmin_qmax(bit_width)
-        (s, zp) = get_group_qparams_symmetric(weight, bit_width, group_size)
+        (s, zp) = get_group_qparams_symmetric(
+            weight,
+            bit_width,
+            group_size,
+            precision=scale_precision,
+        )
         from torchao._executorch_ops import (
             _quantized_decomposed_quantize_per_channel_group_wrapper,
         )
@@ -250,11 +258,15 @@ class Int4WeightOnlyEmbeddingQATQuantizer(TwoStepQuantizer):
                     scale_precision=scale_precision,
                     zero_point_precision=zero_point_precision,
                     device=child.weight.device,
+                    output_dtype=child.weight.dtype,
                 )
                 setattr(module, name, quantized_embedding)
 
                 q_weight, s, zp = self.quantize_weights(
-                    child.weight, self.bit_width, group_size
+                    child.weight,
+                    self.bit_width,
+                    group_size,
+                    scale_precision=scale_precision,
                 )
                 # Load weights and qparams into quantized embedding
                 quantized_embedding.weight = q_weight
@@ -337,6 +349,7 @@ class Int4WeightOnlyEmbedding(torch.nn.Module):
         scale_precision: torch.dtype = torch.float32,
         zero_point_precision: torch.dtype = torch.int32,
         device: torch.device = None,
+        output_dtype: torch.dtype = torch.float32,
     ):
         super().__init__()
 
@@ -354,6 +367,7 @@ class Int4WeightOnlyEmbedding(torch.nn.Module):
         self.group_size = group_size
         self.scale_precision = scale_precision
         self.zero_point_precision = zero_point_precision
+        self.output_dtype = output_dtype
 
         # currently storing unpacked int8 weights
         self.register_buffer(
@@ -380,20 +394,24 @@ class Int4WeightOnlyEmbedding(torch.nn.Module):
         )
 
     def forward(self, x):
-        from torchao._executorch_ops import (
-            _quantized_decomposed_dequantize_per_channel_group_wrapper,
+        from torchao.quantization.quant_primitives import (
+            dequantize_affine,
         )
 
         qmin, qmax = _get_qmin_qmax(self.bit_width)
-        w_dq = _quantized_decomposed_dequantize_per_channel_group_wrapper(
+
+        # dequantize_affine casts to output_dtype before scaling
+        # dequantize_per_channel_group scales and then casts to output_dtype
+        # The two do not agree when dtype != torch.float32
+        w_dq = dequantize_affine(
             self.weight,
+            [1, self.group_size],
             self.scale,
             self.zero_point,
+            torch.int8,
             qmin,
             qmax,
-            torch.int8,
-            self.group_size,
-            x.dtype,
+            output_dtype=self.output_dtype,
         )
         return F.embedding(
             x,

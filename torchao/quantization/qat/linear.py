@@ -202,6 +202,8 @@ class Int8DynActInt4WeightQATQuantizer(_LegacyQATQuantizer):
     def quantize_weights(
         weight: torch.Tensor,
         group_size: int,
+        *,
+        scale_precision: torch.dtype = torch.float32,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Helper function to quantize weights
@@ -209,7 +211,12 @@ class Int8DynActInt4WeightQATQuantizer(_LegacyQATQuantizer):
         # Load weights and qparams into quantized linear
         n_bit = 4
         (qmin, qmax) = _get_qmin_qmax(n_bit)
-        (s, zp) = get_group_qparams_symmetric(weight, n_bit, group_size)
+        (s, zp) = get_group_qparams_symmetric(
+            weight,
+            n_bit,
+            group_size,
+            precision=scale_precision,
+        )
         from torchao._executorch_ops import (
             _quantized_decomposed_quantize_per_channel_group_wrapper,
         )
@@ -243,7 +250,9 @@ class Int8DynActInt4WeightQATQuantizer(_LegacyQATQuantizer):
                 setattr(module, name, quantized_linear)
 
                 q_weight, scales, zeros = self.quantize_weights(
-                    child.weight, config.group_size
+                    child.weight,
+                    config.group_size,
+                    scale_precision=config.scale_precision,
                 )
                 quantized_linear.weight = q_weight
                 quantized_linear.scales = scales
@@ -281,7 +290,7 @@ class Int8DynActInt4WeightQATLinear(FakeQuantizedLinear):
         precision: torch.dtype = torch.float32,
         scales_precision: torch.dtype = torch.float32,
     ) -> None:
-        activation_config = _get_8da4w_activation_config(scales_precision)
+        activation_config = _get_8da4w_activation_config(torch.float32)
         weight_config = _get_8da4w_weight_config(groupsize, scales_precision)
         super().__init__(
             in_features,

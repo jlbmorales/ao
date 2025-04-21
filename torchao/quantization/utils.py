@@ -556,7 +556,7 @@ def get_group_qparams_symmetric(
         quant_max=quant_max,
         eps=eps,
         scale_dtype=precision,
-        zero_point_dtype=precision,
+        zero_point_dtype=torch.int32,
     )
     return scale.reshape(w.shape[0], -1), zero_point.reshape(w.shape[0], -1)
 
@@ -606,6 +606,7 @@ def per_token_dynamic_quant(
         quant_dtype,
         quant_min,
         quant_max,
+        eps=torch.finfo(torch.float32).eps,
         scale_dtype=scale_dtype,
         zero_point_dtype=zero_point_dtype,
     )
